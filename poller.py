@@ -1,7 +1,7 @@
 import os
+import requests
 from googleapiclient.discovery import build
 from google.oauth2.credentials import Credentials
-from twilio.rest import Client
 
 ALLOWED_SENDERS = {
     "placements@cumminscollege.in",
@@ -20,7 +20,8 @@ creds = Credentials(
 )
 gmail_service = build('gmail', 'v1', credentials=creds)
 
-twilio_client = Client(os.environ["TWILIO_ACCOUNT_SID"], os.environ["TWILIO_AUTH_TOKEN"])
+TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
+TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
 def sender_is_allowed(headers):
     for h in headers:
@@ -28,16 +29,19 @@ def sender_is_allowed(headers):
             return any(addr in h['value'] for addr in ALLOWED_SENDERS)
     return False
 
-def send_whatsapp_notification(from_addr, subject):
-    message = twilio_client.messages.create(
-        from_=os.environ["TWILIO_WHATSAPP_FROM"],
-        to=os.environ["MY_WHATSAPP_TO"],
-        body=f"New tracked email\nFrom: {from_addr}\nSubject: {subject}"
-    )
-    print(f"WhatsApp sent, SID: {message.sid}")
+def send_telegram_notification(from_addr, subject):
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": f"New tracked email\nFrom: {from_addr}\nSubject: {subject}"
+    }
+    response = requests.post(url, data=payload)
+    if response.status_code == 200:
+        print(f"Telegram sent: {response.json()['result']['message_id']}")
+    else:
+        print(f"Telegram send failed: {response.status_code} {response.text}")
 
 def main():
-    # Look at messages received in the last ~10 minutes to avoid re-notifying
     results = gmail_service.users().messages().list(
         userId='me',
         q="newer_than:1h",
@@ -60,7 +64,7 @@ def main():
             subject = next((h['value'] for h in headers if h['name'] == 'Subject'), '(no subject)')
             from_addr = next((h['value'] for h in headers if h['name'] == 'From'), '(unknown)')
             print(f"MATCH: From={from_addr} | Subject={subject}")
-            send_whatsapp_notification(from_addr, subject)
+            send_telegram_notification(from_addr, subject)
 
 if __name__ == '__main__':
     main()
