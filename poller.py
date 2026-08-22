@@ -8,6 +8,7 @@ ALLOWED_SENDERS = {
     "comments-noreply@docs.google.com",
     "internship.coordinaorscomp@cumminscollege.in",
     "rakhi.dongaonkar@cumminscollege.in",
+    "vrunani.muley@cumminscollege.in",
 }
 
 creds = Credentials(
