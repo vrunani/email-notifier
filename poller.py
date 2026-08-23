@@ -70,18 +70,21 @@ def summarize_email(body_text):
     if not body_text.strip():
         return "(no readable content)"
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
+    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent"
+    headers = {
+        "Content-Type": "application/json",
+        "X-goog-api-key": GEMINI_API_KEY
+    }
     payload = {
         "contents": [{
             "parts": [{"text": f"Summarize this email in under 5 lines, plain text, no preamble:\n\n{body_text[:3000]}"}]
         }]
     }
-    response = requests.post(url, json=payload)
+    response = requests.post(url, headers=headers, json=payload)
     if response.status_code == 200:
         return response.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
     else:
         return f"(summary failed: {response.status_code})"
-
 
 def send_telegram_notification(from_addr, subject, summary, received_time):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
