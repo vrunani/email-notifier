@@ -53,7 +53,7 @@ def summarize_email(body_text):
     if not body_text.strip():
         return "(no readable content)"
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
     payload = {
         "contents": [{
             "parts": [{"text": f"Summarize this email in under 5 lines, plain text, no preamble:\n\n{body_text[:3000]}"}]
