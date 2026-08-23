@@ -1,6 +1,7 @@
 import os
 import base64
 import json
+import time
 import requests
 from datetime import datetime, timedelta
 from googleapiclient.discovery import build
@@ -29,6 +30,8 @@ TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
 
+GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent"
+
 
 def load_seen_ids():
     if os.path.exists(SEEN_FILE):
@@ -53,6 +56,7 @@ def sender_is_allowed(headers):
 
 
 def extract_body(payload):
+    """Pull plain text body out of a Gmail message payload, handling nested MIME parts."""
     if 'parts' in payload:
         for part in payload['parts']:
             if part.get('mimeType') == 'text/plain' and 'data' in part.get('body', {}):
@@ -65,11 +69,11 @@ def extract_body(payload):
         return base64.urlsafe_b64decode(payload['body']['data']).decode('utf-8', errors='ignore')
     return ""
 
-def summarize_email(body_text):
+
+def summarize_email(body_text, max_retries=3):
     if not body_text.strip():
         return "(no readable content)"
 
-    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent"
     headers = {
         "Content-Type": "application/json",
         "X-goog-api-key": GEMINI_API_KEY
@@ -79,12 +83,24 @@ def summarize_email(body_text):
             "parts": [{"text": f"Summarize this email in under 5 lines, plain text, no preamble:\n\n{body_text[:3000]}"}]
         }]
     }
-    response = requests.post(url, headers=headers, json=payload)
-    if response.status_code == 200:
-        return response.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
-    else:
-        print(f"Gemini API error {response.status_code}: {response.text}")
+
+    for attempt in range(1, max_retries + 1):
+        response = requests.post(GEMINI_URL, headers=headers, json=payload)
+
+        if response.status_code == 200:
+            return response.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+
+        print(f"Gemini API error {response.status_code} (attempt {attempt}/{max_retries}): {response.text}")
+
+        # 503 = model temporarily overloaded, 429 = rate limited — both worth retrying briefly
+        if response.status_code in (503, 429) and attempt < max_retries:
+            time.sleep(attempt * 3)  # 3s, then 6s
+            continue
+
         return f"(summary failed: {response.status_code})"
+
+    return "(summary failed: retries exhausted)"
+
 
 def send_telegram_notification(from_addr, subject, summary, received_time):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
