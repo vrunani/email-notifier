@@ -65,7 +65,6 @@ def extract_body(payload):
         return base64.urlsafe_b64decode(payload['body']['data']).decode('utf-8', errors='ignore')
     return ""
 
-
 def summarize_email(body_text):
     if not body_text.strip():
         return "(no readable content)"
@@ -84,6 +83,7 @@ def summarize_email(body_text):
     if response.status_code == 200:
         return response.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
     else:
+        print(f"Gemini API error {response.status_code}: {response.text}")
         return f"(summary failed: {response.status_code})"
 
 def send_telegram_notification(from_addr, subject, summary, received_time):
