@@ -1,6 +1,7 @@
 import os
 import base64
 import requests
+from datetime import datetime, timedelta
 from googleapiclient.discovery import build
 from google.oauth2.credentials import Credentials
 
@@ -23,7 +24,8 @@ gmail_service = build('gmail', 'v1', credentials=creds)
 
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
-GITHUB_MODELS_TOKEN = os.environ["GITHUB_MODELS_TOKEN"]
+GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
+
 
 def sender_is_allowed(headers):
     for h in headers:
@@ -31,7 +33,9 @@ def sender_is_allowed(headers):
             return any(addr in h['value'] for addr in ALLOWED_SENDERS)
     return False
 
+
 def extract_body(payload):
+    """Pull plain text body out of a Gmail message payload, handling nested MIME parts."""
     if 'parts' in payload:
         for part in payload['parts']:
             if part.get('mimeType') == 'text/plain' and 'data' in part.get('body', {}):
@@ -44,39 +48,36 @@ def extract_body(payload):
         return base64.urlsafe_b64decode(payload['body']['data']).decode('utf-8', errors='ignore')
     return ""
 
+
 def summarize_email(body_text):
     if not body_text.strip():
         return "(no readable content)"
 
-    url = "https://models.github.ai/inference/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {GITHUB_MODELS_TOKEN}",
-        "Content-Type": "application/json"
-    }
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
     payload = {
-        "model": "openai/gpt-4o-mini",
-        "messages": [
-            {"role": "user", "content": f"Summarize this email in under 5 lines, plain text, no preamble:\n\n{body_text[:3000]}"}
-        ],
-        "max_tokens": 200
+        "contents": [{
+            "parts": [{"text": f"Summarize this email in under 5 lines, plain text, no preamble:\n\n{body_text[:3000]}"}]
+        }]
     }
-    response = requests.post(url, headers=headers, json=payload)
+    response = requests.post(url, json=payload)
     if response.status_code == 200:
-        return response.json()["choices"][0]["message"]["content"].strip()
+        return response.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
     else:
         return f"(summary failed: {response.status_code})"
 
-def send_telegram_notification(from_addr, subject, summary):
+
+def send_telegram_notification(from_addr, subject, summary, received_time):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
         "chat_id": TELEGRAM_CHAT_ID,
-        "text": f"New tracked email\nFrom: {from_addr}\nSubject: {subject}\n\nSummary:\n{summary}"
+        "text": f"New tracked email\nFrom: {from_addr}\nSubject: {subject}\nReceived: {received_time}\n\nSummary:\n{summary}"
     }
     response = requests.post(url, data=payload)
     if response.status_code == 200:
         print(f"Telegram sent: {response.json()['result']['message_id']}")
     else:
         print(f"Telegram send failed: {response.status_code} {response.text}")
+
 
 def main():
     results = gmail_service.users().messages().list(
@@ -99,10 +100,16 @@ def main():
         if sender_is_allowed(headers):
             subject = next((h['value'] for h in headers if h['name'] == 'Subject'), '(no subject)')
             from_addr = next((h['value'] for h in headers if h['name'] == 'From'), '(unknown)')
+
+            timestamp_ms = int(msg.get('internalDate', 0))
+            received_time = (datetime.fromtimestamp(timestamp_ms / 1000) + timedelta(hours=5, minutes=30)).strftime('%d %b %Y, %I:%M %p')
+
             body_text = extract_body(msg['payload'])
             summary = summarize_email(body_text)
-            print(f"MATCH: From={from_addr} | Subject={subject}")
-            send_telegram_notification(from_addr, subject, summary)
+
+            print(f"MATCH: From={from_addr} | Subject={subject} | Time={received_time}")
+            send_telegram_notification(from_addr, subject, summary, received_time)
+
 
 if __name__ == '__main__':
     main()
