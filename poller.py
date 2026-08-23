@@ -1,5 +1,6 @@
 import os
 import base64
+import json
 import requests
 from datetime import datetime, timedelta
 from googleapiclient.discovery import build
@@ -12,6 +13,8 @@ ALLOWED_SENDERS = {
     "rakhi.dongaonkar@cumminscollege.in",
     "vrunani.muley@cumminscollege.in",
 }
+
+SEEN_FILE = "seen_messages.json"
 
 creds = Credentials(
     None,
@@ -27,6 +30,21 @@ TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
 
 
+def load_seen_ids():
+    if os.path.exists(SEEN_FILE):
+        with open(SEEN_FILE, 'r') as f:
+            data = json.load(f)
+            return set(data.get('ids', []))
+    return set()
+
+
+def save_seen_ids(seen_ids):
+    # Keep the list from growing forever: retain only the most recent 500 IDs
+    trimmed = list(seen_ids)[-500:]
+    with open(SEEN_FILE, 'w') as f:
+        json.dump({'ids': trimmed}, f)
+
+
 def sender_is_allowed(headers):
     for h in headers:
         if h['name'] == 'From':
@@ -35,7 +53,6 @@ def sender_is_allowed(headers):
 
 
 def extract_body(payload):
-    """Pull plain text body out of a Gmail message payload, handling nested MIME parts."""
     if 'parts' in payload:
         for part in payload['parts']:
             if part.get('mimeType') == 'text/plain' and 'data' in part.get('body', {}):
@@ -80,6 +97,9 @@ def send_telegram_notification(from_addr, subject, summary, received_time):
 
 
 def main():
+    seen_ids = load_seen_ids()
+    new_seen_ids = set(seen_ids)
+
     results = gmail_service.users().messages().list(
         userId='me',
         q="newer_than:1h",
@@ -92,8 +112,13 @@ def main():
         return
 
     for m in messages:
+        msg_id = m['id']
+
+        if msg_id in seen_ids:
+            continue  # already notified about this one, skip it
+
         msg = gmail_service.users().messages().get(
-            userId='me', id=m['id'], format='full'
+            userId='me', id=msg_id, format='full'
         ).execute()
         headers = msg['payload']['headers']
 
@@ -109,6 +134,10 @@ def main():
 
             print(f"MATCH: From={from_addr} | Subject={subject} | Time={received_time}")
             send_telegram_notification(from_addr, subject, summary, received_time)
+
+        new_seen_ids.add(msg_id)
+
+    save_seen_ids(new_seen_ids)
 
 
 if __name__ == '__main__':
