@@ -1,11 +1,9 @@
 import os
-import base64
-import json
-import time
+import email
+import imaplib
 import requests
-from datetime import datetime, timedelta
-from googleapiclient.discovery import build
-from google.oauth2.credentials import Credentials
+from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 
 ALLOWED_SENDERS = {
     "placements@cumminscollege.in",
@@ -15,98 +13,69 @@ ALLOWED_SENDERS = {
     "vrunani.muley@cumminscollege.in",
 }
 
-SEEN_FILE = "seen_messages.json"
-
-creds = Credentials(
-    None,
-    refresh_token=os.environ["GMAIL_REFRESH_TOKEN"],
-    client_id=os.environ["GMAIL_CLIENT_ID"],
-    client_secret=os.environ["GMAIL_CLIENT_SECRET"],
-    token_uri="https://oauth2.googleapis.com/token"
-)
-gmail_service = build('gmail', 'v1', credentials=creds)
-
+GMAIL_ADDRESS = os.environ["GMAIL_ADDRESS"]
+GMAIL_APP_PASSWORD = os.environ["GMAIL_APP_PASSWORD"]
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
-GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
+GITHUB_MODELS_TOKEN = os.environ["GITHUB_MODELS_TOKEN"]
 
-GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent"
-
-
-def load_seen_ids():
-    if os.path.exists(SEEN_FILE):
-        with open(SEEN_FILE, 'r') as f:
-            data = json.load(f)
-            return set(data.get('ids', []))
-    return set()
+LOOKBACK = timedelta(hours=1)
 
 
-def save_seen_ids(seen_ids):
-    # Keep the list from growing forever: retain only the most recent 500 IDs
-    trimmed = list(seen_ids)[-500:]
-    with open(SEEN_FILE, 'w') as f:
-        json.dump({'ids': trimmed}, f)
+def connect():
+    imap = imaplib.IMAP4_SSL("imap.gmail.com")
+    imap.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
+    imap.select("INBOX")
+    return imap
 
 
-def sender_is_allowed(headers):
-    for h in headers:
-        if h['name'] == 'From':
-            return any(addr in h['value'] for addr in ALLOWED_SENDERS)
-    return False
+def sender_is_allowed(from_header):
+    return any(addr in from_header for addr in ALLOWED_SENDERS)
 
 
-def extract_body(payload):
-    """Pull plain text body out of a Gmail message payload, handling nested MIME parts."""
-    if 'parts' in payload:
-        for part in payload['parts']:
-            if part.get('mimeType') == 'text/plain' and 'data' in part.get('body', {}):
-                return base64.urlsafe_b64decode(part['body']['data']).decode('utf-8', errors='ignore')
-            if 'parts' in part:
-                result = extract_body(part)
-                if result:
-                    return result
-    elif payload.get('body', {}).get('data'):
-        return base64.urlsafe_b64decode(payload['body']['data']).decode('utf-8', errors='ignore')
-    return ""
+def extract_body(msg):
+    if msg.is_multipart():
+        for part in msg.walk():
+            if part.get_content_type() == "text/plain" and not part.get(
+                "Content-Disposition"
+            ):
+                charset = part.get_content_charset() or "utf-8"
+                return part.get_payload(decode=True).decode(charset, errors="ignore")
+        return ""
+    else:
+        charset = msg.get_content_charset() or "utf-8"
+        return msg.get_payload(decode=True).decode(charset, errors="ignore")
 
 
-def summarize_email(body_text, max_retries=3):
+def summarize_email(body_text):
     if not body_text.strip():
         return "(no readable content)"
-
+    url = "https://models.github.ai/inference/chat/completions"
     headers = {
+        "Authorization": f"Bearer {GITHUB_MODELS_TOKEN}",
         "Content-Type": "application/json",
-        "X-goog-api-key": GEMINI_API_KEY
     }
     payload = {
-        "contents": [{
-            "parts": [{"text": f"Summarize this email in under 5 lines, plain text, no preamble:\n\n{body_text[:3000]}"}]
-        }]
+        "model": "openai/gpt-4o-mini",
+        "messages": [
+            {
+                "role": "user",
+                "content": f"Summarize this email in under 5 lines, plain text, no preamble:\n\n{body_text[:3000]}",
+            }
+        ],
+        "max_tokens": 200,
     }
-
-    for attempt in range(1, max_retries + 1):
-        response = requests.post(GEMINI_URL, headers=headers, json=payload)
-
-        if response.status_code == 200:
-            return response.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
-
-        print(f"Gemini API error {response.status_code} (attempt {attempt}/{max_retries}): {response.text}")
-
-        # 503 = model temporarily overloaded, 429 = rate limited — both worth retrying briefly
-        if response.status_code in (503, 429) and attempt < max_retries:
-            time.sleep(attempt * 3)  # 3s, then 6s
-            continue
-
-        return f"(summary failed: {response.status_code})"
-
-    return "(summary failed: retries exhausted)"
+    response = requests.post(url, headers=headers, json=payload)
+    if response.status_code == 200:
+        return response.json()["choices"][0]["message"]["content"].strip()
+    return f"(summary failed: {response.status_code})"
 
 
-def send_telegram_notification(from_addr, subject, summary, received_time):
+def send_telegram_notification(from_addr, subject, summary):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
         "chat_id": TELEGRAM_CHAT_ID,
-        "text": f"New tracked email\nFrom: {from_addr}\nSubject: {subject}\nReceived: {received_time}\n\nSummary:\n{summary}"
+        "text": f"New tracked email\nFrom: {from_addr}\nSubject: {subject}\n\nSummary:\n{summary}",
     }
     response = requests.post(url, data=payload)
     if response.status_code == 200:
@@ -116,48 +85,52 @@ def send_telegram_notification(from_addr, subject, summary, received_time):
 
 
 def main():
-    seen_ids = load_seen_ids()
-    new_seen_ids = set(seen_ids)
+    imap = connect()
 
-    results = gmail_service.users().messages().list(
-        userId='me',
-        q="newer_than:1h",
-        labelIds=['INBOX']
-    ).execute()
-
-    messages = results.get('messages', [])
-    if not messages:
-        print("No recent messages.")
+    since_date = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%d-%b-%Y")
+    status, data = imap.search(None, f'(SINCE "{since_date}")')
+    if status != "OK":
+        print("IMAP search failed.")
         return
 
-    for m in messages:
-        msg_id = m['id']
+    ids = data[0].split()
+    if not ids:
+        print("No recent messages.")
+        imap.logout()
+        return
 
-        if msg_id in seen_ids:
-            continue  # already notified about this one, skip it
+    cutoff = datetime.now(timezone.utc) - LOOKBACK
 
-        msg = gmail_service.users().messages().get(
-            userId='me', id=msg_id, format='full'
-        ).execute()
-        headers = msg['payload']['headers']
+    for msg_id in ids:
+        status, msg_data = imap.fetch(msg_id, "(RFC822)")
+        if status != "OK":
+            continue
 
-        if sender_is_allowed(headers):
-            subject = next((h['value'] for h in headers if h['name'] == 'Subject'), '(no subject)')
-            from_addr = next((h['value'] for h in headers if h['name'] == 'From'), '(unknown)')
+        raw_email = msg_data[0][1]
+        msg = email.message_from_bytes(raw_email)
 
-            timestamp_ms = int(msg.get('internalDate', 0))
-            received_time = (datetime.fromtimestamp(timestamp_ms / 1000) + timedelta(hours=5, minutes=30)).strftime('%d %b %Y, %I:%M %p')
+        date_header = msg.get("Date")
+        try:
+            msg_date = parsedate_to_datetime(date_header)
+            if msg_date.tzinfo is None:
+                msg_date = msg_date.replace(tzinfo=timezone.utc)
+        except Exception:
+            continue
 
-            body_text = extract_body(msg['payload'])
+        if msg_date < cutoff:
+            continue
+
+        from_addr = msg.get("From", "(unknown)")
+        subject = msg.get("Subject", "(no subject)")
+
+        if sender_is_allowed(from_addr):
+            body_text = extract_body(msg)
             summary = summarize_email(body_text)
+            print(f"MATCH: From={from_addr} | Subject={subject}")
+            send_telegram_notification(from_addr, subject, summary)
 
-            print(f"MATCH: From={from_addr} | Subject={subject} | Time={received_time}")
-            send_telegram_notification(from_addr, subject, summary, received_time)
-
-        new_seen_ids.add(msg_id)
-
-    save_seen_ids(new_seen_ids)
+    imap.logout()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
