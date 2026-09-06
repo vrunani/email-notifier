@@ -19,6 +19,7 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          MODELS_TOKEN: ${{ secrets.MODELS_TOKEN }}
       - name: Commit updated seen_messages.json
         run: |
           git config user.name "github-actions[bot]"
