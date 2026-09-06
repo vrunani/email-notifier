@@ -1,4 +1,5 @@
 import os
+import json
 import email
 import imaplib
 import requests
@@ -18,6 +19,14 @@ GMAIL_APP_PASSWORD = os.environ["GMAIL_APP_PASSWORD"]
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 GITHUB_MODELS_TOKEN = os.environ["MODELS_TOKEN"]
+
+# --- New: sheet-change detection (Bot 2) ---
+GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
+SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID")
+SHEET_RANGE = os.environ.get("SHEET_RANGE", "A1:Z1000")
+SHEET_BOT_TOKEN = os.environ.get("SHEET_BOT_TOKEN", TELEGRAM_BOT_TOKEN)
+SHEET_CHAT_ID = os.environ.get("SHEET_CHAT_ID", TELEGRAM_CHAT_ID)
+SNAPSHOT_FILE = "sheet_snapshot.json"
 
 LOOKBACK = timedelta(hours=1)
 
@@ -84,6 +93,98 @@ def send_telegram_notification(from_addr, subject, summary):
         print(f"Telegram send failed: {response.status_code} {response.text}")
 
 
+# --- New: Bot 2 helpers ---
+
+def fetch_sheet_data():
+    url = f"https://sheets.googleapis.com/v4/spreadsheets/{SPREADSHEET_ID}/values/{SHEET_RANGE}"
+    params = {"key": GOOGLE_API_KEY}
+    response = requests.get(url, params=params)
+    response.raise_for_status()
+    return response.json().get("values", [])
+
+
+def load_last_snapshot():
+    if os.path.exists(SNAPSHOT_FILE):
+        with open(SNAPSHOT_FILE, "r") as f:
+            return json.load(f)
+    return []
+
+
+def save_snapshot(data):
+    with open(SNAPSHOT_FILE, "w") as f:
+        json.dump(data, f, indent=2)
+
+
+def diff_rows(old_rows, new_rows):
+    changes = []
+    max_len = max(len(old_rows), len(new_rows))
+    for i in range(max_len):
+        old_row = old_rows[i] if i < len(old_rows) else None
+        new_row = new_rows[i] if i < len(new_rows) else None
+        if old_row != new_row:
+            changes.append({"row": i + 1, "old": old_row, "new": new_row})
+    return changes
+
+
+def summarize_sheet_changes(changes):
+    url = "https://models.github.ai/inference/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {GITHUB_MODELS_TOKEN}",
+        "Content-Type": "application/json",
+    }
+    changes_text = json.dumps(changes, indent=2)[:3000]
+    payload = {
+        "model": "openai/gpt-4o-mini",
+        "messages": [
+            {
+                "role": "user",
+                "content": (
+                    "These are row changes in a Google Sheet (old vs new values). "
+                    "Describe briefly what kind of update this is, in under 5 lines, "
+                    "plain text, no preamble:\n\n" + changes_text
+                ),
+            }
+        ],
+        "max_tokens": 200,
+    }
+    response = requests.post(url, headers=headers, json=payload)
+    if response.status_code == 200:
+        return response.json()["choices"][0]["message"]["content"].strip()
+    return f"(summary failed: {response.status_code})"
+
+
+def send_sheet_notification(summary):
+    url = f"https://api.telegram.org/bot{SHEET_BOT_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": SHEET_CHAT_ID,
+        "text": f"Sheet updated\n\n{summary}",
+    }
+    response = requests.post(url, data=payload)
+    if response.status_code == 200:
+        print(f"Sheet bot sent: {response.json()['result']['message_id']}")
+    else:
+        print(f"Sheet bot send failed: {response.status_code} {response.text}")
+
+
+def check_sheet_update():
+    if not GOOGLE_API_KEY or not SPREADSHEET_ID:
+        print("Sheet check skipped: missing GOOGLE_API_KEY or SPREADSHEET_ID.")
+        return
+
+    new_rows = fetch_sheet_data()
+    old_rows = load_last_snapshot()
+
+    changes = diff_rows(old_rows, new_rows)
+    if changes:
+        summary = summarize_sheet_changes(changes)
+        send_sheet_notification(summary)
+        print(f"Sheet changes detected: {len(changes)} row(s).")
+    else:
+        print("No sheet changes detected.")
+
+    save_snapshot(new_rows)
+
+
 def main():
     imap = connect()
 
@@ -128,6 +229,10 @@ def main():
             summary = summarize_email(body_text)
             print(f"MATCH: From={from_addr} | Subject={subject}")
             send_telegram_notification(from_addr, subject, summary)
+
+            # New branch: this mail is a Google Sheets notification -> check the sheet itself
+            if "docs.google.com" in from_addr:
+                check_sheet_update()
 
     imap.logout()
 
