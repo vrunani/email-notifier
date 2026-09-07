@@ -19,7 +19,9 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           MODELS_TOKEN: ${{ secrets.MODELS_TOKEN }}
-          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          SHEETS_CLIENT_ID: ${{ secrets.SHEETS_CLIENT_ID }}
+          SHEETS_CLIENT_SECRET: ${{ secrets.SHEETS_CLIENT_SECRET }}
+          SHEETS_REFRESH_TOKEN: ${{ secrets.SHEETS_REFRESH_TOKEN }}
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
           SHEET_BOT_TOKEN: ${{ secrets.SHEET_BOT_TOKEN }}
           SHEET_CHAT_ID: ${{ secrets.SHEET_CHAT_ID }}
