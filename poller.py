@@ -21,7 +21,9 @@ TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 GITHUB_MODELS_TOKEN = os.environ["MODELS_TOKEN"]
 
 # --- New: sheet-change detection (Bot 2) ---
-GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
+SHEETS_CLIENT_ID = os.environ.get("SHEETS_CLIENT_ID")
+SHEETS_CLIENT_SECRET = os.environ.get("SHEETS_CLIENT_SECRET")
+SHEETS_REFRESH_TOKEN = os.environ.get("SHEETS_REFRESH_TOKEN")
 SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID")
 SHEET_RANGE = os.environ.get("SHEET_RANGE", "A1:Z1000")
 SHEET_BOT_TOKEN = os.environ.get("SHEET_BOT_TOKEN", TELEGRAM_BOT_TOKEN)
@@ -95,10 +97,24 @@ def send_telegram_notification(from_addr, subject, summary):
 
 # --- New: Bot 2 helpers ---
 
+def get_sheets_access_token():
+    url = "https://oauth2.googleapis.com/token"
+    payload = {
+        "client_id": SHEETS_CLIENT_ID,
+        "client_secret": SHEETS_CLIENT_SECRET,
+        "refresh_token": SHEETS_REFRESH_TOKEN,
+        "grant_type": "refresh_token",
+    }
+    response = requests.post(url, data=payload)
+    response.raise_for_status()
+    return response.json()["access_token"]
+
+
 def fetch_sheet_data():
+    access_token = get_sheets_access_token()
     url = f"https://sheets.googleapis.com/v4/spreadsheets/{SPREADSHEET_ID}/values/{SHEET_RANGE}"
-    params = {"key": GOOGLE_API_KEY}
-    response = requests.get(url, params=params)
+    headers = {"Authorization": f"Bearer {access_token}"}
+    response = requests.get(url, headers=headers)
     response.raise_for_status()
     return response.json().get("values", [])
 
@@ -167,8 +183,8 @@ def send_sheet_notification(summary):
 
 
 def check_sheet_update():
-    if not GOOGLE_API_KEY or not SPREADSHEET_ID:
-        print("Sheet check skipped: missing GOOGLE_API_KEY or SPREADSHEET_ID.")
+    if not SHEETS_CLIENT_ID or not SHEETS_CLIENT_SECRET or not SHEETS_REFRESH_TOKEN or not SPREADSHEET_ID:
+        print("Sheet check skipped: missing OAuth secrets or SPREADSHEET_ID.")
         return
 
     new_rows = fetch_sheet_data()
