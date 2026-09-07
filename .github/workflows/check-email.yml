@@ -18,12 +18,15 @@ jobs:
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           MODELS_TOKEN: ${{ secrets.MODELS_TOKEN }}
-      - name: Commit updated seen_messages.json
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          SHEET_BOT_TOKEN: ${{ secrets.SHEET_BOT_TOKEN }}
+          SHEET_CHAT_ID: ${{ secrets.SHEET_CHAT_ID }}
+      - name: Commit updated tracker files
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add seen_messages.json
-          git diff --staged --quiet || git commit -m "Update seen messages tracker [skip ci]"
+          git add seen_messages.json sheet_snapshot.json
+          git diff --staged --quiet || git commit -m "Update trackers [skip ci]"
           git push
