@@ -67,7 +67,7 @@ def summarize_email(body_text):
         "Content-Type": "application/json",
     }
     payload = {
-        "model": "openai/gpt-4o-mini",
+        "model": "openai/gpt-5-mini",
         "messages": [
             {
                 "role": "user",
@@ -150,7 +150,7 @@ def summarize_sheet_changes(changes):
     }
     changes_text = json.dumps(changes, indent=2)[:3000]
     payload = {
-        "model": "openai/gpt-4o-mini",
+        "model": "openai/gpt-5-mini",
         "messages": [
             {
                 "role": "user",
@@ -219,7 +219,7 @@ def main():
     cutoff = datetime.now(timezone.utc) - LOOKBACK
 
     for msg_id in ids:
-        status, msg_data = imap.fetch(msg_id, "(RFC822)")
+        status, msg_data = imap.fetch(msg_id, "(BODY.PEEK[])")
         if status != "OK":
             continue
 
