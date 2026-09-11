@@ -246,6 +246,9 @@ def main():
             print(f"MATCH: From={from_addr} | Subject={subject}")
             send_telegram_notification(from_addr, subject, summary)
 
+            # Mark only tracked/matched emails as read
+            imap.store(msg_id, "+FLAGS", "\\Seen")
+
             # New branch: this mail is a Google Sheets notification -> check the sheet itself
             if "docs.google.com" in from_addr:
                 check_sheet_update()
